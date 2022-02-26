@@ -1,21 +1,26 @@
 # -*- coding: utf-8 -*-
 
 import base64
+import hashlib
 import json
 import os
 import random
 import sqlite3
 import string
+import uuid
 from datetime import datetime
 from hashlib import sha1
 from sqlite3 import Error
 
+import bcrypt as bcrypt
 import pytz
 import requests
 import xmltodict
 from Crypto.Cipher import PKCS1_v1_5
 from Crypto.PublicKey import RSA
 from bs4 import BeautifulSoup
+import jwt
+
 # Zato
 from zato.server.service import Service
 
@@ -41,6 +46,24 @@ class NiraGeneralService(Service):
             print(e)
             return False
 
+    def create_user_accounts_table(self):
+        sql = "CREATE TABLE IF NOT EXISTS user_accounts (id integer PRIMARY KEY, username text NOT NULL, password text, active text, superuser integer);"
+        conn = self.get_conn()
+        state = False
+        if conn:
+            state = self.create_table(conn, sql)
+            conn.close()
+        return state
+
+    def create_jwt_table(self):
+        sql = "CREATE TABLE IF NOT EXISTS jwt (id integer PRIMARY KEY, key text NOT NULL, token text);"
+        conn = self.get_conn()
+        state = False
+        if conn:
+            state = self.create_table(conn, sql)
+            conn.close()
+        return state
+
     def create_auth_table(self):
         sql = "CREATE TABLE IF NOT EXISTS auth (id integer PRIMARY KEY, username text NOT NULL, password text);"
         conn = self.get_conn()
@@ -50,8 +73,132 @@ class NiraGeneralService(Service):
             conn.close()
         return state
 
+    def create_password_table(self):
+        sql = "CREATE TABLE IF NOT EXISTS password_age (id integer PRIMARY KEY, age text NOT NULL);"
+        conn = self.get_conn()
+        state = False
+        if conn:
+            state = self.create_table(conn, sql)
+            conn.close()
+        return state
+
+    def hash_password(self, raw):
+        return bcrypt.hashpw(raw.encode('utf-8'), bcrypt.gensalt())
+
+    def verify_password(self, hashed, password):
+        return bcrypt.checkpw(password.encode('utf-8'), hashed)
+
+    def get_token(self, username, password):
+        user_account = self.get_user_account(username)
+        if user_account and user_account['active'] == 'active' and self.verify_password(user_account['password'], password):
+            key = uuid.uuid4().hex
+            token = jwt.encode({"a": self.hash_password(key).decode('utf-8'), 'user': username}, key, algorithm="HS256")
+            self.remove_user_tokens(username)
+            self.insert_jwt_token(token, key)
+            return {
+                'token': token
+            }
+        return None
+
+    def verify_token(self, token):
+        key = self.get_jwt_key(token)
+        hashed = jwt.decode(token, key, algorithms=["HS256"])
+        user_account = self.get_user_account(hashed['user'])
+        try:
+            del user_account['password']
+        except Exception:
+            pass
+        return {
+            'verified': self.verify_password(hashed['a'].encode('utf-8'), key) and (
+                user_account is not None and user_account['active'] == 'active'),
+            'account': user_account
+        }
+
+    def remove_user_tokens(self, username):
+        conn = self.get_conn()
+        if conn:
+            conn.row_factory = sqlite3.Row
+            cur = conn.cursor()
+            cur.execute(f"SELECT * FROM jwt")
+            rows = cur.fetchall()
+            for row in rows:
+                hashed = jwt.decode(row['token'], row['key'], algorithms=["HS256"])
+                if hashed['user'] == username:
+                    cur.execute(f"DELETE FROM jwt WHERE id = '{row['id']}")
+                    conn.commit()
+
+    def insert_jwt_token(self, token, key):
+        if self.create_jwt_table():
+            conn = self.get_conn()
+            if conn:
+                sql = ''' INSERT INTO jwt(token, key) VALUES(?,?) '''
+                cur = conn.cursor()
+                cur.execute(sql, (token, key))
+                conn.commit()
+                row = cur.lastrowid
+                conn.close()
+                return row
+        return -1
+
+    def create_user_account(self, username, password, active, superuser):
+        if self.create_user_accounts_table():
+            conn = self.get_conn()
+            password_hash = self.hash_password(password)
+
+            if conn:
+                sql = ''' INSERT INTO user_accounts(username,password,active, superuser) VALUES(?,?,?,?) '''
+                cur = conn.cursor()
+                cur.execute(sql, (username, password_hash, active, superuser))
+                conn.commit()
+                row = cur.lastrowid
+                conn.close()
+                return row
+        return -1
+
+    def change_user_account_status(self, username, active):
+        conn = self.get_conn()
+        if conn:
+            sql = f"UPDATE user_accounts SET active = '{active}' WHERE username = '{username}';"
+            cur = conn.cursor()
+            cur.execute(sql)
+            conn.commit()
+            row = cur.lastrowid
+            conn.close()
+            return row
+
+        return -1
+
+    def change_user_account_password(self, username, password):
+        conn = self.get_conn()
+        if conn:
+            sql = f"UPDATE user_accounts SET password = '{self.hash_password(password)}' WHERE username = '{username}';"
+            cur = conn.cursor()
+            cur.execute(sql)
+            conn.commit()
+            row = cur.lastrowid
+            conn.close()
+            return row
+
+        return -1
+
+    def set_age(self, age):
+        if self.create_password_table():
+            conn = self.get_conn()
+            if conn:
+                sql = ''' INSERT INTO password_age(age) VALUES(?) '''
+                del_sql = '''DELETE FROM password_age '''
+                cur = conn.cursor()
+                cur.execute(del_sql)
+                conn.commit()
+                cur.execute(sql, (age,))
+                conn.commit()
+                row = cur.lastrowid
+                conn.close()
+                return row
+        return -1
+
     def set_auth(self, username, password):
-        if self.create_auth_table():
+        if self.create_auth_table() and self.create_password_table():
             conn = self.get_conn()
             if conn:
                 sql = ''' INSERT INTO auth(username,password) VALUES(?,?) '''
@@ -66,6 +213,22 @@ class NiraGeneralService(Service):
                 return row
         return -1
 
+    def get_jwt_key(self, token):
+        """
+        Query all rows in the tasks table
+        :param conn: the Connection object
+        :return:
+        """
+        conn = self.get_conn()
+        if conn:
+            conn.row_factory = sqlite3.Row
+            cur = conn.cursor()
+            cur.execute(f"SELECT * FROM jwt WHERE token = '{token}'")
+            rows = cur.fetchone()
+            key = rows['key'] if rows else None
+            return key
+        return None
+
     def get_auth(self):
         """
         Query all rows in the tasks table
@@ -77,8 +240,48 @@ class NiraGeneralService(Service):
             conn.row_factory = sqlite3.Row
             cur = conn.cursor()
             cur.execute("SELECT * FROM auth")
+            cur2 = conn.cursor()
+            cur2.execute("SELECT * FROM password_age")
             rows = cur.fetchone()
-            return {'username': rows['username'], 'password': rows['password']}
+            rows2 = cur2.fetchone()
+            age = rows2['age'] if rows2 else None
+            return {'username': rows['username'], 'password': rows['password'], 'age': age}
+        return None
+
+    def superuser_exists(self):
+        sql = f"SELECT * FROM user_accounts WHERE superuser=1"
+        conn = self.get_conn()
+        if conn:
+            conn.row_factory = sqlite3.Row
+            cur = conn.cursor()
+            cur.execute(sql)
+            rows = cur.fetchall()
+            username = True if rows else False
+        return False
+
+    def get_user_account(self, username, superuser=None):
+        """
+        Query all rows in the tasks table
+        :param conn: the Connection object
+        :return:
+        """
+        sql = f"SELECT * FROM user_accounts WHERE username='{username}'"
+        if superuser is not None:
+            sql = f"{sql} and superuser={superuser}"
+        conn = self.get_conn()
+        if conn:
+            conn.row_factory = sqlite3.Row
+            cur = conn.cursor()
+            cur.execute(sql)
+            rows = cur.fetchone()
+            username = rows['username'] if rows else None
+            if username:
+                return {
+                    'username': rows['username'],
+                    'password': rows['password'],
+                    'active': rows['active'],
+                    'superuser': rows['superuser']
+                }
         return None
 
     def get_conn(self):
@@ -90,43 +293,203 @@ class NiraGeneralService(Service):
         except Error as e:
             return None
 
+    def reset_password(self, client):
+        url = client.wsdl.url
+        auth = self.get_auth()
+        obj = SoapClientBuilder_v2(
+            wsdl=url,
+            username=auth.get('username'),
+            password=auth.get('password')
+        )
+        new_password = obj.password_generator()
+        res = obj.getGeneric(
+            method='changePassword',
+            params=f'<newPassword>{new_password}</newPassword>'
+        )
+        o = obj.soap2Json(res, self.request.input.method)
+
+        password_days_left = 0
+        try:
+            password_days_left = o['transactionStatus']['passwordDaysLeft']
+            self.set_auth(auth.get('username'), new_password)
+            self.set_age(password_days_left)
+        except Exception:
+            pass
+        return o
+
+    def verify_superuser(self, token):
+        verified = self.verify_token(token)
+        return verified['verified'] and verified['account']['superuser'] == 1
+
     def handle(self):
 
         with self.outgoing.soap.get('NIRA').conn.client() as client:
             method = self.request.input.method
             if method == 'setPassword':
-                cre = self.request.payload
-                self.set_auth(
-                    username=cre['username'],
-                    password=cre['password']
-                )
-                self.response.payload = {
-                    'data': self.get_auth()
-                }
+                if self.verify_superuser(self.request.payload['token']):
+                    del self.request.payload['token']
+                    cre = self.request.payload
+                    self.set_auth(
+                        username=cre['username'],
+                        password=cre['password']
+                    )
+                    self.response.payload = {
+                        'data': self.get_auth()
+                    }
             elif method == 'getPassword':
-                self.response.payload = {
-                    'data': self.get_auth()
-                }
+                if self.verify_superuser(self.request.payload['token']):
+                    self.response.payload = {
+                        'data': self.get_auth()
+                    }
+            elif method == 'changePassword':
+                if self.verify_superuser(self.request.payload['token']):
+                    self.response.payload = {
+                        'data': self.reset_password(client)
+                    }
+            elif method == 'changeUserPassword':
+                verified = self.verify_token(self.request.payload['token'])
+                user = self.request.payload
+                if (verified['verified'] and verified['account']['username'] == user['username']) \
+                        or self.verify_superuser(self.request.payload['token']):
+                    self.change_user_account_password(user['username'], user['password'])
+                    account = self.get_user_account(user['username'])
+                    if account:
+                        del account['password']
+                        self.response.payload = {
+                            'data': {
+                                'account': account,
+                                'status': 'Password updated'
+                            }
+                        }
+                    else:
+                        self.response.payload = {
+                            'data': 'account unknown'
+                        }
+            elif method == 'getUserAccount':
+                verified = self.verify_token(self.request.payload['token'])
+                user = self.request.payload
+                if (verified['verified'] and verified['account']['username'] == user['username']) \
+                        or self.verify_superuser(self.request.payload['token']):
+                    account = self.get_user_account(user['username'])
+                    if account:
+                        del account['password']
+                        self.response.payload = {
+                            'data': account
+                        }
+                    else:
+                        self.response.payload = {
+                            'data': 'account unknown'
+                        }
+            elif method == 'getToken':
+                user = self.request.payload
+                account = self.get_user_account(user['username'])
+                if account:
+                    token = self.get_token(account['username'], user['password'])
+                    self.response.payload = {
+                        'data': token
+                    }
+                else:
+                    self.response.payload = {
+                        'data': 'account unknown'
+                    }
+            elif method == 'deactivateUser':
+                if self.verify_superuser(self.request.payload['token']):
+                    user = self.request.payload
+                    account = self.get_user_account(user['username'])
+                    if account:
+                        self.change_user_account_status(username=user['username'], active='inactive')
+                        account = self.get_user_account(user['username'])
+                        del account['password']
+                        self.response.payload = {
+                            'data': account
+                        }
+                    else:
+                        self.response.payload = {
+                            'data': 'user unknown'
+                        }
+            elif method == 'activateUser':
+                if self.verify_superuser(self.request.payload['token']):
+                    user = self.request.payload
+                    account = self.get_user_account(user['username'])
+                    if account:
+                        self.change_user_account_status(username=user['username'], active='active')
+                        account = self.get_user_account(user['username'])
+                        del account['password']
+                        self.response.payload = {
+                            'data': account
+                        }
+                    else:
+                        self.response.payload = {
+                            'data': 'user unknown'
+                        }
+            elif method == 'registerUser':
+                if self.verify_superuser(self.request.payload['token']) or self.request.payload['token'] == '$re^&&*45rTn)(':
+                    user = self.request.payload
+                    account = self.get_user_account(user['username'])
+                    if account:
+                        self.response.payload = {
+                            'data': 'username is in use'
+                        }
+                    else:
+                        superuser = 0
+                        if user.get('superuser'):
+                            _exists = self.superuser_exists()
+                            superuser = user.get('superuser') if not _exists else 0
+                        self.create_user_account(
+                            username=user['username'],
+                            password=user['password'],
+                            active='active',
+                            superuser=superuser
+                        )
+                        account = self.get_user_account(user['username'])
+                        if account:
+                            del account['password']
+                            self.response.payload = {
+                                'data': account
+                            }
+                        else:
+                            self.response.payload = {
+                                'data': 'failed'
+                            }
             else:
-                url = client.wsdl.url
-                auth = self.get_auth()
-                obj = SoapClientBuilder_v2(
-                    wsdl=url,
-                    username=auth.get('username'),
-                    password=auth.get('password')
-                )
-                res = obj.getGeneric(
-                    method=self.request.input.method,
-                    params=str(obj.dict2Xml(self.request.payload))
-                )
-                o = obj.soap2Json(res, self.request.input.method)
-                try:
-                    del o['transactionStatus']
-                except Exception:
-                    pass
-                self.response.payload = {
-                    'data': json.loads(json.dumps(o))
-                }
+                verified = self.verify_token(self.request.payload['token'])
+                if verified['verified']:
+                    del self.request.payload['token']
+                    url = client.wsdl.url
+                    auth = self.get_auth()
+                    obj = SoapClientBuilder_v2(
+                        wsdl=url,
+                        username=auth.get('username'),
+                        password=auth.get('password')
+                    )
+
+                    res = obj.getGeneric(
+                        method=self.request.input.method,
+                        params=str(obj.dict2Xml(self.request.payload))
+                    )
+                    o = obj.soap2Json(res, self.request.input.method)
+
+                    password_days_left = 0
+                    try:
+                        password_days_left = o['transactionStatus']['passwordDaysLeft']
+                        if int(password_days_left) < 2:
+                            self.reset_password(client)
+                        else:
+                            self.set_age(password_days_left)
+                    except Exception:
+                        self.set_age(password_days_left)
+
+                    try:
+                        del o['transactionStatus']
+                    except Exception:
+                        pass
+                    self.response.payload = {
+                        'data': json.loads(json.dumps(o))
+                    }
+                else:
+                    self.response.payload = {
+                        'data': 'Token is missing or invalid'
+                    }
 
 
 class SoapClientBuilder_v2():
