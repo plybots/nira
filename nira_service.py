@@ -28,6 +28,8 @@ from zato.server.service import Service
 class NiraGeneralService(Service):
 
     name = 'NIRA_GENERAL'
+    TIME_FORMAT = "%B %d, %Y %H:%M:%S"
+    DATE_FORMAT = "%B %d, %Y"
 
     class SimpleIO:
         input = 'method'
@@ -45,6 +47,16 @@ class NiraGeneralService(Service):
         except Error as e:
             print(e)
             return False
+
+    def create_statistics_table(self):
+        sql = "CREATE TABLE IF NOT EXISTS statistics (" \
+              "id integer PRIMARY KEY, username text NOT NULL, api text, time_accessed text, status text);"
+        conn = self.get_conn()
+        state = False
+        if conn:
+            state = self.create_table(conn, sql)
+            conn.close()
+        return state
 
     def create_user_accounts_table(self):
         sql = "CREATE TABLE IF NOT EXISTS user_accounts (id integer PRIMARY KEY, username text NOT NULL, password text, active text, superuser integer);"
@@ -138,6 +150,49 @@ class NiraGeneralService(Service):
                     cur.execute(f"DELETE FROM jwt WHERE id = {row['id']}")
                     conn.commit()
 
+    def get_statistics(self):
+        conn = self.get_conn()
+        if conn:
+            conn.row_factory = sqlite3.Row
+            cur = conn.cursor()
+            sql = '''SELECT * FROM statistics'''
+            cur.execute(sql)
+            rows = cur.fetchall()
+            stats = {}
+            count = 1
+            for row in rows:
+                a = stats.get(row['api'])
+                if a is not None:
+                    d = self.to_datetime(row['time_accessed'])
+                    b = self.to_datetime(a['time_accessed'])
+                    if d > b:
+                        a['time_accessed'] = row['time_accessed']
+                    a['total_today'] = a['total_today'] + self.is_today(row['time_accessed'])
+                    a['total_all_time'] = a['total_all_time'] + 1
+                    count -= 1
+                else:
+                    stats[row['api']] = {
+                        'id': count,
+                        'user': row['username'],
+                        'api': row['api'],
+                        'time_accessed': row['time_accessed'],
+                        'total_today': self.is_today(row['time_accessed']),
+                        'total_all_time': 1
+                    }
+                count += 1
+            return [v for i, v in stats.items()]
+
+    def is_today(self, str_date):
+        today = datetime.now().strftime(self.DATE_FORMAT)
+        c = self.to_datetime(str_date).strftime(self.DATE_FORMAT)
+        if today == c:
+            return 1
+        else:
+            return 0
+
+    def to_datetime(self, str_date):
+        return datetime.strptime(str_date, self.TIME_FORMAT)
+
     def insert_jwt_token(self, token, key):
         if self.create_jwt_table():
             conn = self.get_conn()
@@ -145,6 +200,19 @@ class NiraGeneralService(Service):
                 sql = ''' INSERT INTO jwt(token, key) VALUES(?,?) '''
                 cur = conn.cursor()
                 cur.execute(sql, (token, key))
+                conn.commit()
+                row = cur.lastrowid
+                conn.close()
+                return row
+        return -1
+
+    def insert_statistics(self, username, api, status):
+        if self.create_statistics_table():
+            conn = self.get_conn()
+            if conn:
+                sql = ''' INSERT INTO statistics(username, api, time_accessed, status) VALUES(?,?,?,?) '''
+                cur = conn.cursor()
+                cur.execute(sql, (username, api, datetime.now().strftime(self.TIME_FORMAT), status))
                 conn.commit()
                 row = cur.lastrowid
                 conn.close()
@@ -345,6 +413,7 @@ class NiraGeneralService(Service):
         self.create_jwt_table()
         self.create_auth_table()
         self.create_user_accounts_table()
+        self.create_statistics_table()
 
     def handle(self):
 
@@ -511,6 +580,12 @@ class NiraGeneralService(Service):
                             'error': "Access Denied"
                         }
                     }
+            elif method == 'getStatistics':
+                self.response.payload = {
+                    'data': {
+                        'items': self.get_statistics()
+                    }
+                }
             else:
                 verified = self.verify_token(self.request.payload['token'])
                 if verified['verified']:
@@ -531,6 +606,16 @@ class NiraGeneralService(Service):
 
                         o = obj.soap2Json(res, self.request.input.method)
 
+                        try:
+                            tran_status = o['transactionStatus']['transactionStatus']
+                        except Exception:
+                            tran_status = 'Failed'
+
+                        self.insert_statistics(
+                            verified['account']['username'],
+                            self.request.input.method,
+                            tran_status
+                        )
                         password_days_left = 0
                         try:
                             password_days_left = o['transactionStatus']['passwordDaysLeft']
