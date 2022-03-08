@@ -112,34 +112,34 @@ def get_statistics():
     try:
         conn = get_conn()
         if conn:
-        conn.row_factory = sqlite3.Row
-        cur = conn.cursor()
-        sql = '''SELECT * FROM statistics'''
-        cur.execute(sql)
-        rows = cur.fetchall()
-        stats = {}
-        count = 1
-        for row in rows:
-            a = stats.get(row['api'])
-            if a is not None:
-                d = to_datetime(row['time_accessed'])
-                b = to_datetime(a['time_accessed'])
-                if d > b:
-                    a['time_accessed'] = row['time_accessed']
-                a['total_today'] = a['total_today'] + is_today(row['time_accessed'])
-                a['total_all_time'] = a['total_all_time'] + 1
-                count -= 1
-            else:
-                stats[row['api']] = {
-                    'id': count,
-                    'user': row['username'],
-                    'api': row['api'],
-                    'time_accessed': row['time_accessed'],
-                    'total_today': is_today(row['time_accessed']),
-                    'total_all_time': 1
-                }
-                count += 1
-        return [v for i, v in stats.items()]
+            conn.row_factory = sqlite3.Row
+            cur = conn.cursor()
+            sql = '''SELECT * FROM statistics'''
+            cur.execute(sql)
+            rows = cur.fetchall()
+            stats = {}
+            count = 1
+            for row in rows:
+                a = stats.get(row['api'])
+                if a is not None:
+                    d = to_datetime(row['time_accessed'])
+                    b = to_datetime(a['time_accessed'])
+                    if d > b:
+                        a['time_accessed'] = row['time_accessed']
+                    a['total_today'] = a['total_today'] + is_today(row['time_accessed'])
+                    a['total_all_time'] = a['total_all_time'] + 1
+                    count -= 1
+                else:
+                    stats[row['api']] = {
+                        'id': count,
+                        'user': row['username'],
+                        'api': row['api'],
+                        'time_accessed': row['time_accessed'],
+                        'total_today': is_today(row['time_accessed']),
+                        'total_all_time': 1
+                    }
+                    count += 1
+            return [v for i, v in stats.items()]
     except Exception:
         pass
     return None
