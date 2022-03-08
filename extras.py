@@ -109,8 +109,9 @@ def to_datetime(str_date):
     return datetime.strptime(str_date, TIME_FORMAT)
 
 def get_statistics():
-    conn = get_conn()
-    if conn:
+    try:
+        conn = get_conn()
+        if conn:
         conn.row_factory = sqlite3.Row
         cur = conn.cursor()
         sql = '''SELECT * FROM statistics'''
@@ -139,6 +140,8 @@ def get_statistics():
                 }
                 count += 1
         return [v for i, v in stats.items()]
+    except Exception:
+        pass
     return None
 
 def get_conn():
