@@ -45,7 +45,6 @@ class NiraGeneralService(Service):
             c.execute(create_table_sql)
             return True
         except Error as e:
-            print(e)
             return False
 
     def create_statistics_table(self):
@@ -414,6 +413,14 @@ class NiraGeneralService(Service):
         self.create_auth_table()
         self.create_user_accounts_table()
         self.create_statistics_table()
+
+    def after_handle(self):
+
+        # We only allow requests from this particular origin
+        allow_from_name = 'Access-Control-Allow-Origin'
+        allow_from_value = '*'
+
+        self.response.headers[allow_from_name] = allow_from_value
 
     def handle(self):
 
