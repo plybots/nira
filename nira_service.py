@@ -34,6 +34,7 @@ class NiraGeneralService(Service):
     class SimpleIO:
         input = 'method'
 
+    # create tables
     def create_table(self, conn, create_table_sql):
         """ create a table from the create_table_sql statement
         :param conn: Connection object
@@ -423,14 +424,18 @@ class NiraGeneralService(Service):
         self.response.headers[allow_from_name] = allow_from_value
 
     def handle(self):
-
+        # handles incoming requests
         with self.outgoing.soap.get('NIRA').conn.client() as client:
+            # create necessary database table if not available
             self.create_tables()
+            # get the method to be executed from the request
             method = self.request.input.method
             if method == 'setPassword':
+                # verify superuser status
                 if self.verify_superuser(self.request.payload['token']):
                     del self.request.payload['token']
                     cre = self.request.payload
+                    # add initial stored nira password
                     self.set_auth(
                         username=cre['username'],
                         password=cre['password']
@@ -439,6 +444,7 @@ class NiraGeneralService(Service):
                         'data': self.get_auth()
                     }
             elif method == 'getPassword':
+                # get stored nira password
                 if self.verify_superuser(self.request.payload['token']):
                     auth = self.get_auth()
                     self.response.payload = {
@@ -447,6 +453,7 @@ class NiraGeneralService(Service):
                         }
                     }
             elif method == 'changePassword':
+                # change stored nira password
                 if self.verify_superuser(self.request.payload['token']):
                     re = self.reset_password(client)
                     self.response.payload = {
@@ -455,11 +462,15 @@ class NiraGeneralService(Service):
                         }
                     }
             elif method == 'changeUserPassword':
+                # change api user password
+                # verify token
                 verified = self.verify_token(self.request.payload['token'])
                 user = self.request.payload
                 if (verified['verified'] and verified['account']['username'] == user['username']) \
                         or self.verify_superuser(self.request.payload['token']):
+                    # update user account    
                     self.change_user_account_password(user['username'], user['password'])
+                    # reset tokens
                     self.remove_user_tokens(user['username'])
                     account = self.get_user_account(user['username'])
                     if account:
@@ -477,6 +488,7 @@ class NiraGeneralService(Service):
                             }
                         }
             elif method == 'getUserAccount':
+                # get api user account
                 verified = self.verify_token(self.request.payload['token'])
                 user = self.request.payload
                 if (verified['verified'] and verified['account']['username'] == user['username']) \
@@ -500,6 +512,7 @@ class NiraGeneralService(Service):
                         }
                     }
             elif method == 'getToken':
+                # get api access token
                 user = self.request.payload
                 account = self.get_user_account(user['username'])
                 token = self.get_token(account['username'], user['password'])
@@ -516,6 +529,7 @@ class NiraGeneralService(Service):
                             }
                     }
             elif method == 'deactivateUser':
+                # disable api user access
                 if self.verify_superuser(self.request.payload['token']):
                     user = self.request.payload
                     account = self.get_user_account(user['username'])
@@ -534,6 +548,7 @@ class NiraGeneralService(Service):
                             }
                         }
             elif method == 'activateUser':
+                # re-enable api user access
                 if self.verify_superuser(self.request.payload['token']):
                     user = self.request.payload
                     account = self.get_user_account(user['username'])
@@ -551,6 +566,7 @@ class NiraGeneralService(Service):
                             }
                         }
             elif method == 'registerUser':
+                # add new api user
                 if self.verify_superuser(self.request.payload['token']) or self.request.payload['token'] == '$re^&&*45rTn)(':
                     user = self.request.payload
                     account = self.get_user_account(user['username'])
@@ -588,12 +604,14 @@ class NiraGeneralService(Service):
                         }
                     }
             elif method == 'getStatistics':
+                # retrieve access stats
                 self.response.payload = {
                     'data': {
                         'items': self.get_statistics()
                     }
                 }
             else:
+                # get nira data based on method
                 verified = self.verify_token(self.request.payload['token'])
                 if verified['verified']:
                     del self.request.payload['token']
@@ -625,8 +643,10 @@ class NiraGeneralService(Service):
                         )
                         password_days_left = 0
                         try:
+                            # update password days left
                             password_days_left = o['transactionStatus']['passwordDaysLeft']
                             if int(password_days_left) < 2:
+                                # auto update nira password if 2 days are left to expiry
                                 self.reset_password(client)
                             else:
                                 self.set_age(password_days_left)
