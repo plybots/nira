@@ -8,7 +8,7 @@ import random
 import sqlite3
 import string
 import uuid
-from datetime import datetime
+from datetime import datetime, timedelta
 from hashlib import sha1
 from sqlite3 import Error
 
@@ -48,6 +48,16 @@ class NiraGeneralService(Service):
         except Error as e:
             return False
 
+    def create_nita_token_table(self):
+        sql = "CREATE TABLE IF NOT EXISTS nita_token (" \
+              "id integer PRIMARY KEY, token text NOT NULL, expires text);"
+        conn = self.get_conn()
+        state = False
+        if conn:
+            state = self.create_table(conn, sql)
+            conn.close()
+        return state
+
     def create_statistics_table(self):
         sql = "CREATE TABLE IF NOT EXISTS statistics (" \
               "id integer PRIMARY KEY, username text NOT NULL, api text, time_accessed text, status text);"
@@ -78,6 +88,15 @@ class NiraGeneralService(Service):
 
     def create_auth_table(self):
         sql = "CREATE TABLE IF NOT EXISTS auth (id integer PRIMARY KEY, username text NOT NULL, password text);"
+        conn = self.get_conn()
+        state = False
+        if conn:
+            state = self.create_table(conn, sql)
+            conn.close()
+        return state
+
+    def create_nita_auth_table(self):
+        sql = "CREATE TABLE IF NOT EXISTS nita_auth (id integer PRIMARY KEY, username text NOT NULL, password text NOT NULL, base_url text NOT NULL);"
         conn = self.get_conn()
         state = False
         if conn:
@@ -292,6 +311,41 @@ class NiraGeneralService(Service):
                 return row
         return -1
 
+    def set_nita_auth(self, username, password, base_url):
+        if self.create_nita_auth_table() and self.create_nita_token_table():
+            conn = self.get_conn()
+            if conn:
+                sql = ''' INSERT INTO nita_auth(username,password,base_url) VALUES(?,?,?) '''
+                del_sql = '''DELETE FROM nita_auth '''
+                del_token_sql = '''DELETE FROM nita_token '''
+                cur = conn.cursor()
+                cur.execute(del_sql)
+                cur.execute(del_token_sql)
+                conn.commit()
+                cur.execute(sql, (username, password, base_url))
+                conn.commit()
+                row = cur.lastrowid
+                conn.close()
+                return row
+        return -1
+
+    def set_nita_token(self, token):
+        expires = (datetime.now() + timedelta(seconds=3000)).strftime("%d/%m/%y %H:%M:%S.%f")
+        if self.create_nita_auth_table() and self.create_nita_token_table():
+            conn = self.get_conn()
+            if conn:
+                sql = ''' INSERT INTO nita_token(token,expires) VALUES(?,?) '''
+                del_sql = '''DELETE FROM auth '''
+                cur = conn.cursor()
+                cur.execute(del_sql)
+                conn.commit()
+                cur.execute(sql, (token, expires))
+                conn.commit()
+                row = cur.lastrowid
+                conn.close()
+                return row
+        return -1
+
     def get_jwt_key(self, token):
         """
         Query all rows in the tasks table
@@ -328,6 +382,51 @@ class NiraGeneralService(Service):
                 return {'username': rows['username'], 'password': rows['password'], 'age': age}
         except Exception:
             pass
+        return None
+
+    def get_nita_auth(self):
+        """
+        Query all rows in the tasks table
+        :param conn: the Connection object
+        :return:
+        """
+        try:
+            conn = self.get_conn()
+            if conn:
+                conn.row_factory = sqlite3.Row
+                cur = conn.cursor()
+                cur.execute("SELECT * FROM nita_auth")
+                cur2 = conn.cursor()
+                cur2.execute("SELECT * FROM nita_token")
+                rows = cur.fetchone()
+                rows2 = cur2.fetchone()
+                expired = True
+                try:
+                    expires = rows2['expires']
+                    format_data = "%d/%m/%y %H:%M:%S.%f"
+                    date = datetime.strptime(expires, format_data)
+                    expired = datetime.now() > date
+                except Exception:
+                    pass
+                base_url = rows['base_url']
+                if expired:
+                    # generate new token
+                    username = rows['username']
+                    password = rows['password']
+                    from requests.auth import HTTPBasicAuth
+                    headers = {'Content-Type': 'application/x-www-form-urlencoded'}
+                    request_body = {
+                        "grant_type": "client_credentials"
+                    }
+                    res = requests.post(base_url+'token', verify=False,  data=request_body, headers=headers,
+                                        auth=HTTPBasicAuth(username, password))
+                    token = res.json().get("access_token")
+                    self.set_nita_token(token)
+                    return token, base_url
+                else:
+                    return rows2['token'], base_url
+        except Exception as e:
+            return str(e)
         return None
 
     def superuser_exists(self):
@@ -414,6 +513,8 @@ class NiraGeneralService(Service):
         self.create_auth_table()
         self.create_user_accounts_table()
         self.create_statistics_table()
+        self.create_nita_token_table()
+        self.create_nita_auth_table()
 
     def after_handle(self):
 
@@ -425,253 +526,293 @@ class NiraGeneralService(Service):
 
     def handle(self):
         # handles incoming requests
-        with self.outgoing.soap.get('NIRA').conn.client() as client:
-            # create necessary database table if not available
-            self.create_tables()
-            # get the method to be executed from the request
-            method = self.request.input.method
-            if method == 'setPassword':
-                # verify superuser status
-                if self.verify_superuser(self.request.payload['token']):
-                    del self.request.payload['token']
-                    cre = self.request.payload
-                    # add initial stored nira password
-                    self.set_auth(
-                        username=cre['username'],
-                        password=cre['password']
-                    )
-                    self.response.payload = {
-                        'data': self.get_auth()
-                    }
-            elif method == 'getPassword':
-                # get stored nira password
-                if self.verify_superuser(self.request.payload['token']):
-                    auth = self.get_auth()
-                    self.response.payload = {
-                        'data': auth if auth else {
-                            'error': 'No auth credentials found'
-                        }
-                    }
-            elif method == 'changePassword':
-                # change stored nira password
-                if self.verify_superuser(self.request.payload['token']):
-                    re = self.reset_password(client)
-                    self.response.payload = {
-                        'data': re if re else {
-                            'error': 'No auth credentials found'
-                        }
-                    }
-            elif method == 'changeUserPassword':
-                # change api user password
-                # verify token
-                verified = self.verify_token(self.request.payload['token'])
-                user = self.request.payload
-                if (verified['verified'] and verified['account']['username'] == user['username']) \
-                        or self.verify_superuser(self.request.payload['token']):
-                    # update user account    
-                    self.change_user_account_password(user['username'], user['password'])
-                    # reset tokens
-                    self.remove_user_tokens(user['username'])
-                    account = self.get_user_account(user['username'])
-                    if account:
-                        del account['password']
-                        self.response.payload = {
-                            'data': {
-                                'account': account,
-                                'status': 'Password updated'
-                            }
-                        }
-                    else:
-                        self.response.payload = {
-                            'data': {
-                                'error': 'user unknown'
-                            }
-                        }
-            elif method == 'getUserAccount':
-                # get api user account
-                verified = self.verify_token(self.request.payload['token'])
-                user = self.request.payload
-                if (verified['verified'] and verified['account']['username'] == user['username']) \
-                        or self.verify_superuser(self.request.payload['token']):
-                    account = self.get_user_account(user['username'])
-                    if account:
-                        del account['password']
-                        self.response.payload = {
-                            'data': account
-                        }
-                    else:
-                        self.response.payload = {
-                            'data': {
-                                'error': 'user unknown'
-                            }
-                        }
-                else:
-                    self.response.payload = {
-                        'data': {
-                            'error': 'Authorization Error'
-                        }
-                    }
-            elif method == 'getToken':
-                # get api access token
-                user = self.request.payload
+        # with self.outgoing.soap.get('NIRA').conn.client() as client:
+        # create necessary database table if not available
+        self.create_tables()
+        # get the method to be executed from the request
+        method = self.request.input.method
+        if method == 'setPassword':
+            # verify superuser status
+            if self.verify_superuser(self.request.payload['token']):
+                del self.request.payload['token']
+                cre = self.request.payload
+                # add initial stored nira password
+                self.set_auth(
+                    username=cre['username'],
+                    password=cre['password']
+                )
+                self.response.payload = {
+                    'data': self.get_auth()
+                }
+        elif method == 'setNitaClient':
+            # verify superuser status
+            if self.verify_superuser(self.request.payload['token']):
+                del self.request.payload['token']
+                cre = self.request.payload
+                # add initial stored nira password
+                self.set_nita_auth(
+                    username=cre['username'],
+                    password=cre['password'],
+                    base_url=cre['base_url']
+                )
+                self.response.payload = {
+                    'data': self.get_nita_auth()
+                }
+        # elif method == 'getPassword':
+        #     # get stored nira password
+        #     if self.verify_superuser(self.request.payload['token']):
+        #         auth = self.get_auth()
+        #         self.response.payload = {
+        #             'data': auth if auth else {
+        #                 'error': 'No auth credentials found'
+        #             }
+        #         }
+        # elif method == 'changePassword':
+        #     # change stored nira password
+        #     if self.verify_superuser(self.request.payload['token']):
+        #         re = self.reset_password(client)
+        #         self.response.payload = {
+        #             'data': re if re else {
+        #                 'error': 'No auth credentials found'
+        #             }
+        #         }
+        elif method == 'changeUserPassword':
+            # change api user password
+            # verify token
+            verified = self.verify_token(self.request.payload['token'])
+            user = self.request.payload
+            if (verified['verified'] and verified['account']['username'] == user['username']) \
+                    or self.verify_superuser(self.request.payload['token']):
+                # update user account
+                self.change_user_account_password(user['username'], user['password'])
+                # reset tokens
+                self.remove_user_tokens(user['username'])
                 account = self.get_user_account(user['username'])
-                token = self.get_token(account['username'], user['password'])
                 if account:
+                    del account['password']
                     self.response.payload = {
-                        'data': token if token else {
-                            'error': 'Invalid Credentials'
+                        'data': {
+                            'account': account,
+                            'status': 'Password updated'
                         }
                     }
                 else:
                     self.response.payload = {
                         'data': {
-                                'error': 'user unknown'
-                            }
+                            'error': 'user unknown'
+                        }
                     }
-            elif method == 'deactivateUser':
-                # disable api user access
-                if self.verify_superuser(self.request.payload['token']):
-                    user = self.request.payload
-                    account = self.get_user_account(user['username'])
-                    if account:
-                        self.change_user_account_status(username=user['username'], active='inactive')
-                        account = self.get_user_account(user['username'])
-                        self.remove_user_tokens(user['username'])
-                        del account['password']
-                        self.response.payload = {
-                            'data': account
-                        }
-                    else:
-                        self.response.payload = {
-                            'data': {
-                                'error': 'user unknown'
-                            }
-                        }
-            elif method == 'activateUser':
-                # re-enable api user access
-                if self.verify_superuser(self.request.payload['token']):
-                    user = self.request.payload
-                    account = self.get_user_account(user['username'])
-                    if account:
-                        self.change_user_account_status(username=user['username'], active='active')
-                        account = self.get_user_account(user['username'])
-                        del account['password']
-                        self.response.payload = {
-                            'data': account
-                        }
-                    else:
-                        self.response.payload = {
-                            'data': {
-                                'error': 'user unknown'
-                            }
-                        }
-            elif method == 'registerUser':
-                # add new api user
-                if self.verify_superuser(self.request.payload['token']) or self.request.payload['token'] == '$re^&&*45rTn)(':
-                    user = self.request.payload
-                    account = self.get_user_account(user['username'])
-                    if account:
-                        self.response.payload = {
-                            'data': 'username is in use'
-                        }
-                    else:
-                        superuser = 0
-                        if user.get('superuser'):
-                            _exists = self.superuser_exists()
-                            superuser = user.get('superuser') if not _exists else 0
-                        self.create_user_account(
-                            username=user['username'],
-                            password=user['password'],
-                            active='active',
-                            superuser=superuser
-                        )
-                        account = self.get_user_account(user['username'])
-                        if account:
-                            del account['password']
-                            self.response.payload = {
-                                'data': account
-                            }
-                        else:
-                            self.response.payload = {
-                                'data': {
-                                    'error': 'Reg. Failed'
-                                }
-                            }
+        elif method == 'getUserAccount':
+            # get api user account
+            verified = self.verify_token(self.request.payload['token'])
+            user = self.request.payload
+            if (verified['verified'] and verified['account']['username'] == user['username']) \
+                    or self.verify_superuser(self.request.payload['token']):
+                account = self.get_user_account(user['username'])
+                if account:
+                    del account['password']
+                    self.response.payload = {
+                        'data': account
+                    }
                 else:
                     self.response.payload = {
                         'data': {
-                            'error': "Access Denied"
+                            'error': 'user unknown'
                         }
                     }
-            elif method == 'getStatistics':
-                # retrieve access stats
+            else:
                 self.response.payload = {
                     'data': {
-                        'items': self.get_statistics()
+                        'error': 'Authorization Error'
+                    }
+                }
+        elif method == 'getToken':
+            # get api access token
+            user = self.request.payload
+            account = self.get_user_account(user['username'])
+            token = self.get_token(account['username'], user['password'])
+            if account:
+                self.response.payload = {
+                    'data': token if token else {
+                        'error': 'Invalid Credentials'
                     }
                 }
             else:
-                # get nira data based on method
-                verified = self.verify_token(self.request.payload['token'])
-                if verified['verified']:
-                    del self.request.payload['token']
-                    url = client.wsdl.url
-                    auth = self.get_auth()
-                    if auth:
-                        obj = SoapClientBuilder_v2(
-                            wsdl=url,
-                            username=auth.get('username'),
-                            password=auth.get('password')
-                        )
-
-                        res = obj.getGeneric(
-                            method=self.request.input.method,
-                            params=str(obj.dict2Xml(self.request.payload))
-                        )
-
-                        o = obj.soap2Json(res, self.request.input.method)
-
-                        try:
-                            tran_status = o['transactionStatus']['transactionStatus']
-                        except Exception:
-                            tran_status = 'Failed'
-
-                        self.insert_statistics(
-                            verified['account']['username'],
-                            self.request.input.method,
-                            tran_status
-                        )
-                        password_days_left = 0
-                        try:
-                            # update password days left
-                            password_days_left = o['transactionStatus']['passwordDaysLeft']
-                            if int(password_days_left) < 2:
-                                # auto update nira password if 2 days are left to expiry
-                                self.reset_password(client)
-                            else:
-                                self.set_age(password_days_left)
-                        except Exception:
-                            self.set_age(password_days_left)
-
-                        try:
-                            del o['transactionStatus']
-                        except Exception:
-                            pass
+                self.response.payload = {
+                    'data': {
+                        'error': 'user unknown'
+                    }
+                }
+        elif method == 'deactivateUser':
+            # disable api user access
+            if self.verify_superuser(self.request.payload['token']):
+                user = self.request.payload
+                account = self.get_user_account(user['username'])
+                if account:
+                    self.change_user_account_status(username=user['username'], active='inactive')
+                    account = self.get_user_account(user['username'])
+                    self.remove_user_tokens(user['username'])
+                    del account['password']
+                    self.response.payload = {
+                        'data': account
+                    }
+                else:
+                    self.response.payload = {
+                        'data': {
+                            'error': 'user unknown'
+                        }
+                    }
+        elif method == 'activateUser':
+            # re-enable api user access
+            if self.verify_superuser(self.request.payload['token']):
+                user = self.request.payload
+                account = self.get_user_account(user['username'])
+                if account:
+                    self.change_user_account_status(username=user['username'], active='active')
+                    account = self.get_user_account(user['username'])
+                    del account['password']
+                    self.response.payload = {
+                        'data': account
+                    }
+                else:
+                    self.response.payload = {
+                        'data': {
+                            'error': 'user unknown'
+                        }
+                    }
+        elif method == 'registerUser':
+            # add new api user
+            if self.verify_superuser(self.request.payload['token']) or self.request.payload[
+                'token'] == '$re^&&*45rTn)(':
+                user = self.request.payload
+                account = self.get_user_account(user['username'])
+                if account:
+                    self.response.payload = {
+                        'data': 'username is in use'
+                    }
+                else:
+                    superuser = 0
+                    if user.get('superuser'):
+                        _exists = self.superuser_exists()
+                        superuser = user.get('superuser') if not _exists else 0
+                    self.create_user_account(
+                        username=user['username'],
+                        password=user['password'],
+                        active='active',
+                        superuser=superuser
+                    )
+                    account = self.get_user_account(user['username'])
+                    if account:
+                        del account['password']
                         self.response.payload = {
-                            'data': json.loads(json.dumps(o))
+                            'data': account
                         }
                     else:
                         self.response.payload = {
                             'data': {
-                                'error': 'No auth credentials found'
+                                'error': 'Reg. Failed'
                             }
+                        }
+            else:
+                self.response.payload = {
+                    'data': {
+                        'error': "Access Denied"
+                    }
+                }
+        elif method == 'getStatistics':
+            # retrieve access stats
+            self.response.payload = {
+                'data': {
+                    'items': self.get_statistics()
+                }
+            }
+        else:
+            # get nira data based on method
+            verified = self.verify_token(self.request.payload['token'])
+            if verified['verified']:
+                del self.request.payload['token']
+                nira_url = "http://192.168.14.126:14460/pilatusp2-tpi2-ws/ThirdPartyInterfaceNewWS?wsdl"
+                auth = self.get_auth()
+                if auth:
+                    obj = SoapClientBuilder_v2(
+                        wsdl=nira_url,
+                        username=auth.get('username'),
+                        password=auth.get('password')
+                    )
+
+                    # parts = url.split("?")
+                    #
+                    # if len(parts) > 1 and parts[1] == 'wsdl':
+                    #     res = obj.getGeneric(
+                    #         method=self.request.input.method,
+                    #         params=str(obj.dict2Xml(self.request.payload))
+                    #     )
+                    #
+                    #     o = obj.soap2Json(res, self.request.input.method)
+                    #
+                    #     try:
+                    #         tran_status = o['transactionStatus']['transactionStatus']
+                    #     except Exception:
+                    #         tran_status = 'Failed'
+                    #
+                    #     self.insert_statistics(
+                    #         verified['account']['username'],
+                    #         self.request.input.method,
+                    #         tran_status
+                    #     )
+                    #     password_days_left = 0
+                    #     try:
+                    #         # update password days left
+                    #         password_days_left = o['transactionStatus']['passwordDaysLeft']
+                    #         if int(password_days_left) < 2:
+                    #             # auto update nira password if 2 days are left to expiry
+                    #             self.reset_password(client)
+                    #         else:
+                    #             self.set_age(password_days_left)
+                    #     except Exception:
+                    #         self.set_age(password_days_left)
+                    #
+                    #     try:
+                    #         del o['transactionStatus']
+                    #     except Exception:
+                    #         pass
+                    #     self.response.payload = {
+                    #         'data': json.loads(json.dumps(o))
+                    #     }
+                    # else:
+                    nita_token, base_url = self.get_nita_auth()
+                    nita_headers = obj.get_nita_headers(nita_token)
+                    params = str(obj.dict2Params(self.request.payload))
+                    response = requests.get(
+                        base_url + "t/nira.go.ug/nira-api/1.0.0/" + self.request.input.method+params,
+                        headers=nita_headers)
+                    try:
+                        o = response.json().get('return')
+                        if o:
+                            if o.get('transactionStatus'):
+                                if o.get('transactionStatus').get("error"):
+                                    o = o.get('transactionStatus').get("error")
+                                else:
+                                    del o['transactionStatus']
+                        self.response.payload = {
+                            'data': o
+                        }
+                    except Exception as e:
+                        self.response.payload = {
+                            'data': response.text
                         }
                 else:
                     self.response.payload = {
                         'data': {
-                            'error': 'Token is missing or invalid'
+                            'error': 'No auth credentials found'
                         }
                     }
+            else:
+                self.response.payload = {
+                    'data': {
+                        'error': 'Token is missing or invalid'
+                    }
+                }
 
 
 class SoapClientBuilder_v2():
@@ -790,6 +931,25 @@ class SoapClientBuilder_v2():
         namespace = 'xmlns:wsse= "http://docs.oasis-open.org/wss/2004/01/oasis-200401-wss-wssecurity-secext-1.0.xsd"'
         return namespace, header
 
+    def get_nita_headers(self, nita_token):
+        username = self.username
+        nonce_bytes = self.generatenonce_asbytes()
+        nonce = base64.b64encode(nonce_bytes).decode('utf-8')
+        timestamp = self.create_timestamp()
+        created_digest = self.timestamp_fordigest(timestamp)
+        created_digest_bytes = self.gettimestamp_asbytes(created_digest)
+        passwordhash_bytes = self.hashpassword_withdigest()
+        password_digest = self.generatedigest_withbytesvalues(nonce_bytes, created_digest_bytes, passwordhash_bytes)
+        created_request = self.timestamp_forrequest(timestamp)
+        forward = base64.b64encode(f"{username}:{password_digest}".encode("utf-8"))
+        headers = {
+            'Authorization': 'Bearer '+nita_token,
+            "nira-nonce": nonce,
+            "nira-auth-forward": forward.decode("utf-8"),
+            "nira-created": created_request
+        }
+        return headers
+
     def getEntity(self, method, params):
         url = self.wsdl
         namespace, security_header = self.get_auth_header()
@@ -822,6 +982,13 @@ class SoapClientBuilder_v2():
                 f'<{k}>{v}</{k}>'
             )
         return ' '.join(xml)
+
+    def dict2Params(self, data):
+        xml = []
+        for k, v in data.items():
+            xml.append(f'{k}={v}')
+
+        return f'?{"&".join(xml)}'
 
     def soap2Json(self, xml, caller=None):
         o = xmltodict.parse(xml)
