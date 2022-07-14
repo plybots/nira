@@ -1,0 +1,22 @@
+sudo docker run --pull=always -d -it --rm -p 22022:22 -p 8183:8183 -p 11223:11223 -p 17010:17010 --name zato ghcr.io/zatosource/zato-3.2-quickstart
+sudo docker exec -it zato bash
+su - zato
+/opt/zato/current/bin/pip install --upgrade bcrypt
+/opt/zato/current/bin/pip install --upgrade beautifulsoup4
+/opt/zato/current/bin/pip install --upgrade pycryptodome
+/opt/zato/current/bin/pip install --upgrade PyJWT
+/opt/zato/current/bin/pip install --upgrade xmltodict
+
+zato stop ~/env/qs-1/server1
+zato start ~/env/qs-1/server1
+curl localhost:17010/zato/ping
+
+exit
+apt update && apt install git -y
+su - zato
+cd ~ && git clone https://github.com/plydot/router-app.git page-router && cd page-router
+cp extras.py /opt/zato/3.2.0/code/zato-web-admin/src/zato/admin/web/templatetags/extras.py
+cp service-usage.html /opt/zato/3.2.0/code/zato-web-admin/src/zato/admin/templates/zato/stats/service-usage.html
+exit && exit
+sudo docker restart zato
+sudo docker exec zato /bin/bash -c 'cat /opt/zato/env/details/all-zato-env-details.json'
