@@ -848,7 +848,7 @@ class SoapClientBuilder_v2():
         """Creates timestamp to be used when
         sending request
         """
-        utc_now = pytz.utc.localize(datetime.utcnow())
+        utc_now = pytz.utc.localize(datetime.now())
         eat_now = utc_now.astimezone(pytz.timezone('Africa/Kampala'))
         eat_time = eat_now.isoformat()
 
@@ -859,7 +859,7 @@ class SoapClientBuilder_v2():
     def create_timestamp(self):
         """Create timestamp
         """
-        utc_now = pytz.utc.localize(datetime.utcnow())
+        utc_now = pytz.utc.localize(datetime.now())
         eat_now = utc_now.astimezone(pytz.timezone('Africa/Kampala'))
         eat_time = eat_now.isoformat()
 
