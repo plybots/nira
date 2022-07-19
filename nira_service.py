@@ -791,7 +791,10 @@ class NiraGeneralService(Service):
                         if o:
                             if o.get('transactionStatus'):
                                 if o.get('transactionStatus').get("error"):
-                                    o = o.get('transactionStatus').get("error")
+                                    o = {
+                                        "error": o.get('transactionStatus').get("error"),
+                                        "timestamp": nita_headers.get('nira-created')
+                                    }
                                 else:
                                     del o['transactionStatus']
                         self.response.payload = {
