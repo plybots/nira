@@ -335,7 +335,7 @@ class NiraGeneralService(Service):
             conn = self.get_conn()
             if conn:
                 sql = ''' INSERT INTO nita_token(token,expires) VALUES(?,?) '''
-                del_sql = '''DELETE FROM auth '''
+                del_sql = '''DELETE FROM nita_token '''
                 cur = conn.cursor()
                 cur.execute(del_sql)
                 conn.commit()
@@ -374,12 +374,13 @@ class NiraGeneralService(Service):
                 conn.row_factory = sqlite3.Row
                 cur = conn.cursor()
                 cur.execute("SELECT * FROM auth")
-                cur2 = conn.cursor()
-                cur2.execute("SELECT * FROM password_age")
+                # cur2 = conn.cursor()
+                # cur2.execute("SELECT * FROM password_age")
                 rows = cur.fetchone()
-                rows2 = cur2.fetchone()
-                age = rows2['age'] if rows2 else None
-                return {'username': rows['username'], 'password': rows['password'], 'age': age}
+                # rows2 = cur2.fetchone()
+                # age = rows2['age'] if rows2 else None
+                # return {'username': rows['username'], 'password': rows['password'], 'age': age
+                return {'username': rows['username'], 'password': rows['password']}
         except Exception:
             pass
         return None
@@ -682,8 +683,8 @@ class NiraGeneralService(Service):
                     }
         elif method == 'registerUser':
             # add new api user
-            if self.verify_superuser(self.request.payload['token']) or self.request.payload[
-                'token'] == '$re^&&*45rTn)(':
+            if self.verify_superuser(
+                    self.request.payload['token']) or self.request.payload['token'] == '$re^&&*45rTn)(':
                 user = self.request.payload
                 account = self.get_user_account(user['username'])
                 if account:
