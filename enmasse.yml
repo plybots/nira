@@ -2,10 +2,8 @@ outconn_soap:
   - name: NIRA
     is_active: true
     address: http://154.72.206.138:8080/pilatusp2-tpi2-ws/ThirdPartyInterfaceNewWS?wsdl
-    transport: soap
     security_type: none
     ping_method: GET
-    soap_version: 1.1
     data_format: suds
 channel_plain_http:
   - name: NIRA_GENERAL
