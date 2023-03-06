@@ -7,7 +7,7 @@ outgoing_soap:
     ping_method: GET
     soap_version: 1.1
     data_format: suds
-channel_rest:
+channel_plain_http:
   - name: NIRA_GENERAL
     is_active: true
     url_path: /api/v2/{method}
@@ -15,3 +15,5 @@ channel_rest:
     method: POST
     data_format: json
     security_type: none
+    cache_expiry: 0
+    match_slash: true
