@@ -4,7 +4,6 @@ outconn_soap:
     address: http://154.72.206.138:8080/pilatusp2-tpi2-ws/ThirdPartyInterfaceNewWS?wsdl
     security_type: none
     ping_method: GET
-    data_format: suds
 channel_plain_http:
   - name: NIRA_GENERAL
     is_active: true
