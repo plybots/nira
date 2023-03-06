@@ -1,4 +1,4 @@
-outgoing_soap:
+outgoing_http_soap:
   - name: NIRA
     is_active: true
     address: http://154.72.206.138:8080/pilatusp2-tpi2-ws/ThirdPartyInterfaceNewWS?wsdl
