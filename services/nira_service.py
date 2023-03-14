@@ -805,7 +805,8 @@ class NiraGeneralService(Service):
                         self.response.payload = {
                             'data': {
                                 'error': response.text,
-                                'exception': str(e)
+                                'exception': str(e),
+                                'response': response.json()
                             }
                         }
                 else:
