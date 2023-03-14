@@ -803,7 +803,10 @@ class NiraGeneralService(Service):
                         }
                     except Exception as e:
                         self.response.payload = {
-                            'data': response.text
+                            'data': {
+                                'error': response.text,
+                                'exception': str(e)
+                            }
                         }
                 else:
                     self.response.payload = {
