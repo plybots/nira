@@ -17,6 +17,7 @@ su - zato
 cd ~ && git clone https://github.com/plydot/router-app.git page-router && cd page-router
 cp extras.py /opt/zato/3.2.0/code/zato-web-admin/src/zato/admin/web/templatetags/extras.py
 cp service-usage.html /opt/zato/3.2.0/code/zato-web-admin/src/zato/admin/templates/zato/stats/service-usage.html
-exit && exit
+exit
+exit
 sudo docker restart zato
 sudo docker exec zato /bin/bash -c 'cat /opt/zato/env/details/all-zato-env-details.json'
