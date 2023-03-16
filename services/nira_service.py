@@ -787,6 +787,7 @@ class NiraGeneralService(Service):
                     response = requests.get(
                         base_url + "t/nira.go.ug/nira-api/1.0.0/" + self.request.input.method+params,
                         headers=nita_headers)
+
                     try:
                         o = response.json().get('return')
                         if o:
@@ -806,7 +807,7 @@ class NiraGeneralService(Service):
                             'data': {
                                 'error': response.text,
                                 'exception': str(e),
-                                'response': response.json()
+                                'url': response.url
                             }
                         }
                 else:
@@ -855,7 +856,7 @@ class SoapClientBuilder_v2():
         """
         utc_now = pytz.utc.localize(datetime.utcnow())
         eat_now = utc_now.astimezone(pytz.timezone('Africa/Kampala'))
-        # eat_now = (eat_now + timedelta(hours=3)) - timedelta(minutes=30)
+        eat_now = (eat_now + timedelta(hours=7)) - timedelta(minutes=15)
         eat_time = eat_now.isoformat()
 
         timestamp = '{}+03:00'.format(eat_time[:-9])
@@ -867,7 +868,7 @@ class SoapClientBuilder_v2():
         """
         utc_now = pytz.utc.localize(datetime.utcnow())
         eat_now = utc_now.astimezone(pytz.timezone('Africa/Kampala'))
-        # eat_now = (eat_now + timedelta(hours=3)) - timedelta(minutes=30)
+        eat_now = (eat_now + timedelta(hours=7)) - timedelta(minutes=15)
         eat_time = eat_now.isoformat()
 
         return eat_time
@@ -996,7 +997,8 @@ class SoapClientBuilder_v2():
     def dict2Params(self, data):
         xml = []
         for k, v in data.items():
-            xml.append(f'{k}={v}')
+            if k != 'method':
+                xml.append(f'{k}={v}')
 
         return f'?{"&".join(xml)}'
 
