@@ -855,7 +855,7 @@ class SoapClientBuilder_v2():
         """
         utc_now = pytz.utc.localize(datetime.utcnow())
         eat_now = utc_now.astimezone(pytz.timezone('Africa/Kampala'))
-        eat_now = (eat_now + timedelta(hours=3)) - timedelta(minutes=30)
+        # eat_now = (eat_now + timedelta(hours=3)) - timedelta(minutes=30)
         eat_time = eat_now.isoformat()
 
         timestamp = '{}+03:00'.format(eat_time[:-9])
@@ -867,7 +867,7 @@ class SoapClientBuilder_v2():
         """
         utc_now = pytz.utc.localize(datetime.utcnow())
         eat_now = utc_now.astimezone(pytz.timezone('Africa/Kampala'))
-        eat_now = (eat_now + timedelta(hours=3)) - timedelta(minutes=30)
+        # eat_now = (eat_now + timedelta(hours=3)) - timedelta(minutes=30)
         eat_time = eat_now.isoformat()
 
         return eat_time
