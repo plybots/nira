@@ -26,7 +26,6 @@ from zato.server.service import Service
 
 
 class NiraGeneralService(Service):
-
     name = 'NIRA_GENERAL'
     TIME_FORMAT = "%B %d, %Y %H:%M:%S"
     DATE_FORMAT = "%B %d, %Y"
@@ -97,6 +96,15 @@ class NiraGeneralService(Service):
 
     def create_nita_auth_table(self):
         sql = "CREATE TABLE IF NOT EXISTS nita_auth (id integer PRIMARY KEY, username text NOT NULL, password text NOT NULL, base_url text NOT NULL);"
+        conn = self.get_conn()
+        state = False
+        if conn:
+            state = self.create_table(conn, sql)
+            conn.close()
+        return state
+
+    def create_offset_table(self):
+        sql = "CREATE TABLE IF NOT EXISTS timeoffset (id integer PRIMARY KEY, hours integer NOT NULL, minutes integer NOT NULL);"
         conn = self.get_conn()
         state = False
         if conn:
@@ -346,6 +354,42 @@ class NiraGeneralService(Service):
                 return row
         return -1
 
+    def set_offset(self, hours, minutes):
+        if self.create_offset_table():
+            conn = self.get_conn()
+            if conn:
+                sql = ''' INSERT INTO timeoffset(hours, minutes) VALUES(?,?) '''
+                del_sql = '''DELETE FROM timeoffset '''
+                cur = conn.cursor()
+                cur.execute(del_sql)
+                conn.commit()
+                cur.execute(sql, (hours, minutes))
+                conn.commit()
+                row = cur.lastrowid
+                conn.close()
+                return row
+        return -1
+
+    def get_offset(self):
+        """
+        Query all rows in the tasks table
+        :param conn: the Connection object
+        :return:
+        """
+        conn = self.get_conn()
+        if conn:
+            conn.row_factory = sqlite3.Row
+            cur = conn.cursor()
+            cur.execute(f"SELECT * FROM timeoffset")
+            rows = cur.fetchone()
+            hours = rows['hours'] if rows else 0
+            minutes = rows['minutes'] if rows else 0
+            return {
+                'hours': hours,
+                'minutes': minutes
+            }
+        return None
+
     def get_jwt_key(self, token):
         """
         Query all rows in the tasks table
@@ -516,6 +560,7 @@ class NiraGeneralService(Service):
         self.create_statistics_table()
         self.create_nita_token_table()
         self.create_nita_auth_table()
+        self.create_offset_table()
 
     def after_handle(self):
 
@@ -559,6 +604,22 @@ class NiraGeneralService(Service):
                 self.response.payload = {
                     'data': self.get_nita_auth()
                 }
+        elif method == 'setOffset':
+            if self.verify_superuser(self.request.payload['token']):
+                offsets = self.request.payload
+                hours = offsets.get('hours', 0)
+                minutes = offsets.get('minutes', 0)
+                self.set_offset(hours, minutes)
+                self.response.payload = {
+                    'data': self.get_offset()
+                }
+            else:
+                self.response.payload = {
+                    'data': {
+                        'error': 'Only superuser can execute this request'
+                    }
+                }
+
         # elif method == 'getPassword':
         #     # get stored nira password
         #     if self.verify_superuser(self.request.payload['token']):
@@ -863,12 +924,45 @@ class SoapClientBuilder_v2():
 
         return timestamp
 
+    def get_conn(self):
+        sqlite_db = r"/opt/zato/3.2.0/code/zato_sqlite.db"
+
+        """ create a database connection to a SQLite database """
+        try:
+            return sqlite3.connect(sqlite_db)
+        except Error as e:
+            return None
+
+    def get_offset(self):
+        """
+        Query all rows in the tasks table
+        :param conn: the Connection object
+        :return:
+        """
+        conn = self.get_conn()
+        if conn:
+            conn.row_factory = sqlite3.Row
+            cur = conn.cursor()
+            cur.execute(f"SELECT * FROM timeoffset")
+            rows = cur.fetchone()
+            hours = rows['hours'] if rows else 0
+            minutes = rows['minutes'] if rows else 0
+            return {
+                'hours': hours,
+                'minutes': minutes
+            }
+        return {
+            'hours': 0,
+            'minutes': 0
+        }
+
     def create_timestamp(self):
         """Create timestamp
         """
+        offsets = self.get_offset()
         utc_now = pytz.utc.localize(datetime.utcnow())
         eat_now = utc_now.astimezone(pytz.timezone('Africa/Kampala'))
-        eat_now = (eat_now + timedelta(hours=7)) - timedelta(minutes=15)
+        eat_now = (eat_now + timedelta(hours=offsets.get('hours'))) - timedelta(minutes=offsets.get('minutes'))
         eat_time = eat_now.isoformat()
 
         return eat_time
